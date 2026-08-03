@@ -1,5 +1,7 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
+
 from dotenv import load_dotenv
 import os
 
@@ -9,181 +11,165 @@ load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-CUSTOMER_ROLE_ID = int(
-    os.getenv("CUSTOMER_ROLE_ID")
+GEN_ACCESS_ROLE_ID = int(
+    os.getenv("GEN_ACCESS_ROLE_ID")
 )
 
 
-KEY_FILE = "trial_keys.txt"
+# Key files
+
+KEY_FILES = {
+
+    "day": "day_keys.txt",
+
+    "week": "week_keys.txt",
+
+    "month": "month_keys.txt",
+
+    "lifetime": "lifetime_keys.txt"
+
+}
 
 
+
+# Discord intents
 
 intents = discord.Intents.default()
-intents.message_content = True
+
 intents.members = True
 
 
 bot = commands.Bot(
-    command_prefix="/",
+
+    command_prefix="!",
+
     intents=intents
+
 )
 
 
 
-# -------------------------
-# Key system
-# -------------------------
-
-def get_keys():
-
-    with open(KEY_FILE, "r") as file:
-        return file.readlines()
+# ==========================
+# KEY SYSTEM
+# ==========================
 
 
+def get_key(filename):
 
-def claim_key():
+    try:
 
-    keys = get_keys()
+        with open(filename, "r") as file:
+
+            keys = file.readlines()
 
 
-    if len(keys) == 0:
+        if len(keys) == 0:
+
+            return None
+
+
+
+        key = keys[0].strip()
+
+
+
+        with open(filename, "w") as file:
+
+            file.writelines(
+                keys[1:]
+            )
+
+
+        return key
+
+
+
+    except FileNotFoundError:
+
+        print(
+            f"{filename} not found"
+        )
+
         return None
 
 
-    key = keys[0].strip()
-
-
-    with open(KEY_FILE, "w") as file:
-
-        file.writelines(
-            keys[1:]
-        )
-
-
-    return key
 
 
 
-# -------------------------
-# Button
-# -------------------------
+async def send_key(
 
-class TrialButton(discord.ui.View):
+    interaction: discord.Interaction,
 
-    def __init__(self):
+    key_type: str
 
-        super().__init__(
-            timeout=None
-        )
+):
 
 
-    @discord.ui.button(
+    # Check role
 
-        label="Claim Free Trial",
+    role = interaction.guild.get_role(
 
-        style=discord.ButtonStyle.gray,
-
-        custom_id="trial_button"
+        GEN_ACCESS_ROLE_ID
 
     )
-    async def claim(
-
-        self,
-
-        interaction,
-
-        button
-
-    ):
 
 
-        member = interaction.guild.get_member(
-            interaction.user.id
-        )
-
-
-        customer_role = interaction.guild.get_role(
-            CUSTOMER_ROLE_ID
-        )
-
-
-        # Already claimed check
-
-        if customer_role in member.roles:
-
-            await interaction.response.send_message(
-
-                "❌ You have already claimed a free trial, Or your already a customer.",
-
-                ephemeral=True
-
-            )
-
-            return
-
-
-
-        key = claim_key()
-
-
-        if key is None:
-
-            await interaction.response.send_message(
-
-                "❌ No trial keys left.",
-
-                ephemeral=True
-
-            )
-
-            return
-
-
-
-        # Give customer role
-
-        await member.add_roles(
-            customer_role
-        )
-
-
-
-        # DM key
-
-        try:
-
-            await member.send(
-
-                f"""
-🎉 Your free trial key:
-
-```{key}```
-
-Your Customer role has also been added.
-
-Enjoy your trial!
-"""
-
-            )
-
-
-        except discord.Forbidden:
-
-            await interaction.response.send_message(
-
-                "❌ Your DMs are closed. Enable DMs and try again.",
-
-                ephemeral=True
-
-            )
-
-            return
-
+    if role not in interaction.user.roles:
 
 
         await interaction.response.send_message(
 
-            "✅ Check your DMs! Your trial key has been sent.",
+            "❌ You need the **Gen Access** role to use this.",
+
+            ephemeral=True
+
+        )
+
+        return
+
+
+
+    key = get_key(
+
+        KEY_FILES[key_type]
+
+    )
+
+
+    if key is None:
+
+
+        await interaction.response.send_message(
+
+            "❌ No keys available for this product.",
+
+            ephemeral=True
+
+        )
+
+        return
+
+
+
+    try:
+
+
+        await interaction.user.send(
+
+            f"""
+✅ Your {key_type.title()} key:
+{key}
+
+
+Enjoy!
+"""
+
+        )
+
+
+        await interaction.response.send_message(
+
+            "✅ Check your DMs! Your key has been sent.",
 
             ephemeral=True
 
@@ -191,67 +177,127 @@ Enjoy your trial!
 
 
 
-# -------------------------
-# Commands
-# -------------------------
-
-@bot.command()
-async def trial(ctx):
-
-    embed = discord.Embed(
-
-        title="🎁 Free Trial",
-
-        description=
-        "Click below to claim your free trial key.\n\n"
-        "⚠️ One key per account.",
-
-        colour=0xF2F3F5
-
-    )
+    except discord.Forbidden:
 
 
-    await ctx.send(
+        await interaction.response.send_message(
 
-        embed=embed,
+            "❌ I cannot DM you. Please enable DMs from server members.",
 
-        view=TrialButton()
+            ephemeral=True
 
-    )
+        )
 
 
 
 
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def stock(ctx):
-
-    keys = get_keys()
+# ==========================
+# SLASH COMMANDS
+# ==========================
 
 
-    await ctx.send(
+@bot.tree.command(
+    name="day",
+    description="Get a day key"
+)
 
-        f"📦 Trial keys remaining: **{len(keys)}**"
+async def day(
+    interaction: discord.Interaction
+):
+
+    await send_key(
+
+        interaction,
+
+        "day"
 
     )
 
 
 
-# -------------------------
-# Startup
-# -------------------------
+
+
+@bot.tree.command(
+    name="week",
+    description="Get a week key"
+)
+
+async def week(
+    interaction: discord.Interaction
+):
+
+    await send_key(
+
+        interaction,
+
+        "week"
+
+    )
+
+
+
+
+
+@bot.tree.command(
+    name="month",
+    description="Get a month key"
+)
+
+async def month(
+    interaction: discord.Interaction
+):
+
+    await send_key(
+
+        interaction,
+
+        "month"
+
+    )
+
+
+
+
+
+@bot.tree.command(
+    name="lifetime",
+    description="Get a lifetime key"
+)
+
+async def lifetime(
+    interaction: discord.Interaction
+):
+
+    await send_key(
+
+        interaction,
+
+        "lifetime"
+
+    )
+
+
+
+
+
+# ==========================
+# READY
+# ==========================
+
 
 @bot.event
+
 async def on_ready():
 
+
+    await bot.tree.sync()
+
+
     print(
+
         f"Logged in as {bot.user}"
-    )
 
-
-    bot.add_view(
-        TrialButton()
     )
 
 
