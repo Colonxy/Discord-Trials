@@ -7,54 +7,17 @@ from dotenv import load_dotenv
 
 
 # ============================================================
-# CONFIG
+# LOAD ENVIRONMENT VARIABLES
 # ============================================================
 
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
-
 GUILD_ID = int(os.getenv("GUILD_ID"))
 CUSTOMER_ROLE_ID = int(os.getenv("CUSTOMER_ROLE_ID"))
 
 stripe.api_key = STRIPE_SECRET_KEY
-
-
-# ============================================================
-# BOT
-# ============================================================
-
-class StripeBot(discord.Client):
-
-    def __init__(self):
-        intents = discord.Intents.default()
-
-        super().__init__(intents=intents)
-
-        self.tree = app_commands.CommandTree(self)
-
-    async def setup_hook(self):
-        guild = discord.Object(id=GUILD_ID)
-
-        self.tree.copy_global_to(guild=guild)
-        await self.tree.sync(guild=guild)
-
-
-bot = StripeBot()
-
-
-# ============================================================
-# BOT READY
-# ============================================================
-
-@bot.event
-async def on_ready():
-
-    print("--------------------------------")
-    print(f"Logged in as {bot.user}")
-    print(f"Bot ID: {bot.user.id}")
-    print("--------------------------------")
 
 
 # ============================================================
@@ -64,7 +27,6 @@ async def on_ready():
 class ClaimCustomerButton(discord.ui.Button):
 
     def __init__(self):
-
         super().__init__(
             label="Claim Customer Role",
             style=discord.ButtonStyle.secondary,
@@ -72,21 +34,24 @@ class ClaimCustomerButton(discord.ui.Button):
             custom_id="claim_customer_role"
         )
 
-    async def callback(self, interaction: discord.Interaction):
-
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
         await interaction.response.send_modal(
             InvoiceModal()
         )
 
 
 # ============================================================
-# BUTTON VIEW
+# VERIFICATION VIEW
 # ============================================================
 
 class VerificationView(discord.ui.View):
 
     def __init__(self):
-
+        # IMPORTANT:
+        # timeout=None makes this a persistent view.
         super().__init__(timeout=None)
 
         self.add_item(
@@ -114,7 +79,9 @@ class InvoiceModal(discord.ui.Modal):
             max_length=255
         )
 
-        self.add_item(self.invoice_id)
+        self.add_item(
+            self.invoice_id
+        )
 
 
     async def on_submit(
@@ -158,7 +125,6 @@ class InvoiceModal(discord.ui.Modal):
 
             return
 
-
         except stripe.error.StripeError:
 
             embed = discord.Embed(
@@ -179,7 +145,7 @@ class InvoiceModal(discord.ui.Modal):
 
 
         # ====================================================
-        # CHECK PAYMENT
+        # CHECK IF INVOICE IS PAID
         # ====================================================
 
         if invoice.status != "paid":
@@ -207,7 +173,7 @@ class InvoiceModal(discord.ui.Modal):
 
 
         # ====================================================
-        # CHECK DISCORD ID
+        # GET INVOICE METADATA
         # ====================================================
 
         metadata = invoice.get(
@@ -219,6 +185,10 @@ class InvoiceModal(discord.ui.Modal):
             "discord_user_id"
         )
 
+
+        # ====================================================
+        # CHECK IF INVOICE IS LINKED
+        # ====================================================
 
         if not discord_user_id:
 
@@ -241,7 +211,7 @@ class InvoiceModal(discord.ui.Modal):
 
 
         # ====================================================
-        # MAKE SURE INVOICE BELONGS TO USER
+        # CHECK DISCORD USER ID
         # ====================================================
 
         if str(discord_user_id) != str(
@@ -266,7 +236,7 @@ class InvoiceModal(discord.ui.Modal):
 
 
         # ====================================================
-        # GET GUILD
+        # GET SERVER
         # ====================================================
 
         guild = interaction.guild
@@ -282,7 +252,7 @@ class InvoiceModal(discord.ui.Modal):
 
 
         # ====================================================
-        # GET ROLE
+        # GET CUSTOMER ROLE
         # ====================================================
 
         role = guild.get_role(
@@ -317,8 +287,16 @@ class InvoiceModal(discord.ui.Modal):
 
         if member is None:
 
+            embed = discord.Embed(
+                title="❌ Error",
+                description=(
+                    "I couldn't find you in this server."
+                ),
+                color=discord.Color.red()
+            )
+
             await interaction.followup.send(
-                "❌ I couldn't find you in this server.",
+                embed=embed,
                 ephemeral=True
             )
 
@@ -326,7 +304,7 @@ class InvoiceModal(discord.ui.Modal):
 
 
         # ====================================================
-        # ALREADY HAS ROLE
+        # CHECK IF ALREADY HAS CUSTOMER ROLE
         # ====================================================
 
         if role in member.roles:
@@ -348,7 +326,7 @@ class InvoiceModal(discord.ui.Modal):
 
 
         # ====================================================
-        # GIVE ROLE
+        # GIVE CUSTOMER ROLE
         # ====================================================
 
         try:
@@ -381,6 +359,24 @@ class InvoiceModal(discord.ui.Modal):
 
             return
 
+        except discord.HTTPException:
+
+            embed = discord.Embed(
+                title="❌ Discord Error",
+                description=(
+                    "Discord couldn't give you the role.\n\n"
+                    "Please try again."
+                ),
+                color=discord.Color.red()
+            )
+
+            await interaction.followup.send(
+                embed=embed,
+                ephemeral=True
+            )
+
+            return
+
 
         # ====================================================
         # SUCCESS
@@ -396,6 +392,12 @@ class InvoiceModal(discord.ui.Modal):
             color=discord.Color.green()
         )
 
+        embed.add_field(
+            name="Invoice",
+            value=f"`{invoice_id}`",
+            inline=False
+        )
+
         embed.set_footer(
             text="Stripe Payment Verification"
         )
@@ -407,12 +409,88 @@ class InvoiceModal(discord.ui.Modal):
 
 
 # ============================================================
-# SETUP COMMAND
+# DISCORD BOT
+# ============================================================
+
+class StripeBot(discord.Client):
+
+    def __init__(self):
+
+        intents = discord.Intents.default()
+
+        super().__init__(
+            intents=intents
+        )
+
+        self.tree = app_commands.CommandTree(
+            self
+        )
+
+
+    # ========================================================
+    # BOT STARTUP
+    # ========================================================
+
+    async def setup_hook(self):
+
+        guild = discord.Object(
+            id=GUILD_ID
+        )
+
+        # Sync slash commands
+        self.tree.copy_global_to(
+            guild=guild
+        )
+
+        await self.tree.sync(
+            guild=guild
+        )
+
+        # ====================================================
+        # IMPORTANT RAILWAY FIX
+        # ====================================================
+        #
+        # Register the persistent button when the bot starts.
+        #
+        # Without this, Discord can display the button but
+        # the bot won't know what to do when someone clicks it
+        # after a restart/redeploy.
+        #
+        self.add_view(
+            VerificationView()
+        )
+
+        print("Persistent verification button registered.")
+
+
+# ============================================================
+# CREATE BOT
+# ============================================================
+
+bot = StripeBot()
+
+
+# ============================================================
+# BOT READY
+# ============================================================
+
+@bot.event
+async def on_ready():
+
+    print("----------------------------------------")
+    print(f"Logged in as: {bot.user}")
+    print(f"Bot ID: {bot.user.id}")
+    print("Bot is online!")
+    print("----------------------------------------")
+
+
+# ============================================================
+# SETUP VERIFICATION PANEL
 # ============================================================
 
 @bot.tree.command(
     name="setup-verification",
-    description="Create the customer verification panel."
+    description="Create the Stripe customer verification panel."
 )
 @app_commands.checks.has_permissions(
     administrator=True
@@ -425,9 +503,8 @@ async def setup_verification(
         title="Payment Verification",
         description=(
             "Have you purchased from us?\n\n"
-            "Click the button below and enter your "
-            "Stripe invoice ID to claim your "
-            "**Customer** role.\n\n"
+            "Click **Claim Customer Role** below "
+            "and enter your Stripe invoice ID.\n\n"
             "Your payment will be checked securely "
             "through Stripe."
         ),
@@ -438,10 +515,22 @@ async def setup_verification(
         )
     )
 
+    embed.add_field(
+        name="How it works",
+        value=(
+            "1. Click **Claim Customer Role**\n"
+            "2. Enter your Stripe invoice ID\n"
+            "3. We'll verify your payment\n"
+            "4. Receive the **Customer** role"
+        ),
+        inline=False
+    )
+
     embed.set_footer(
         text="Stripe Payment Verification"
     )
 
+    # Send the panel
     await interaction.channel.send(
         embed=embed,
         view=VerificationView()
@@ -454,7 +543,7 @@ async def setup_verification(
 
 
 # ============================================================
-# ERROR HANDLER
+# SETUP COMMAND ERROR
 # ============================================================
 
 @setup_verification.error
@@ -474,20 +563,37 @@ async def setup_verification_error(
             ephemeral=True
         )
 
+    else:
+
+        print(
+            f"Setup command error: {error}"
+        )
+
 
 # ============================================================
-# RUN
+# CHECK CONFIG
 # ============================================================
 
 if not DISCORD_TOKEN:
+
     raise ValueError(
-        "DISCORD_TOKEN is missing from .env"
+        "DISCORD_TOKEN is missing from Railway variables."
     )
+
 
 if not STRIPE_SECRET_KEY:
+
     raise ValueError(
-        "STRIPE_SECRET_KEY is missing from .env"
+        "STRIPE_SECRET_KEY is missing from Railway variables."
     )
 
 
-bot.run(DISCORD_TOKEN)
+# ============================================================
+# START BOT
+# ============================================================
+
+print("Starting Stripe Discord Bot...")
+
+bot.run(
+    DISCORD_TOKEN
+)
