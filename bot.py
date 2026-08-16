@@ -13,8 +13,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = int(os.getenv("GUILD_ID"))
-CUSTOMER_ROLE_ID = int(os.getenv("CUSTOMER_ROLE_ID"))
+
+try:
+    GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+    CUSTOMER_ROLE_ID = int(os.getenv("CUSTOMER_ROLE_ID", "0"))
+except ValueError:
+    raise ValueError(
+        "GUILD_ID and CUSTOMER_ROLE_ID must be numbers."
+    )
 
 
 # ============================================================
@@ -23,7 +29,7 @@ CUSTOMER_ROLE_ID = int(os.getenv("CUSTOMER_ROLE_ID"))
 
 def is_valid_invoice_format(invoice_id: str) -> bool:
 
-    # Accepts IDs like:
+    # Example:
     # 26e0f061-f08d-4551-8fca-0ec0a4769dc6
 
     pattern = (
@@ -68,15 +74,14 @@ class ClaimCustomerButton(discord.ui.Button):
 
 
 # ============================================================
-# PERSISTENT BUTTON VIEW
+# PERSISTENT VIEW
 # ============================================================
 
 class VerificationView(discord.ui.View):
 
     def __init__(self):
 
-        # IMPORTANT:
-        # timeout=None makes the button persistent.
+        # Makes the button survive bot restarts
         super().__init__(
             timeout=None
         )
@@ -118,18 +123,20 @@ class InvoiceModal(discord.ui.Modal):
         interaction: discord.Interaction
     ):
 
-        # Get entered ID
-        invoice_id = self.invoice_id.value.strip()
+        # ====================================================
+        # GET INVOICE ID
+        # ====================================================
 
-        # Remove markdown if somebody pastes **ID**
-        invoice_id = invoice_id.replace(
-            "**",
-            ""
-        ).strip()
+        invoice_id = (
+            self.invoice_id.value
+            .strip()
+            .replace("**", "")
+            .strip()
+        )
 
 
         # ====================================================
-        # CHECK ID FORMAT
+        # CHECK INVOICE FORMAT
         # ====================================================
 
         if not is_valid_invoice_format(
@@ -184,7 +191,8 @@ class InvoiceModal(discord.ui.Modal):
                 title="❌ Configuration Error",
                 description=(
                     "I couldn't find the Customer role.\n\n"
-                    "Please check your CUSTOMER_ROLE_ID."
+                    "Check your CUSTOMER_ROLE_ID "
+                    "Railway variable."
                 ),
                 color=discord.Color.red()
             )
@@ -198,17 +206,47 @@ class InvoiceModal(discord.ui.Modal):
 
 
         # ====================================================
-        # GET MEMBER
+        # FETCH MEMBER DIRECTLY FROM DISCORD
         # ====================================================
 
-        member = guild.get_member(
-            interaction.user.id
-        )
+        try:
 
-        if member is None:
+            member = await guild.fetch_member(
+                interaction.user.id
+            )
+
+        except discord.NotFound:
 
             await interaction.response.send_message(
-                "❌ I couldn't find you in this server.",
+                "❌ You are not a member of this server.",
+                ephemeral=True
+            )
+
+            return
+
+        except discord.Forbidden:
+
+            await interaction.response.send_message(
+                (
+                    "❌ I don't have permission to retrieve "
+                    "your server membership."
+                ),
+                ephemeral=True
+            )
+
+            return
+
+        except discord.HTTPException as error:
+
+            print(
+                f"Member fetch error: {error}"
+            )
+
+            await interaction.response.send_message(
+                (
+                    "❌ Discord couldn't retrieve your "
+                    "server profile. Please try again."
+                ),
                 ephemeral=True
             )
 
@@ -216,7 +254,7 @@ class InvoiceModal(discord.ui.Modal):
 
 
         # ====================================================
-        # CHECK IF ALREADY CUSTOMER
+        # CHECK IF ALREADY HAS CUSTOMER ROLE
         # ====================================================
 
         if role in member.roles:
@@ -238,6 +276,42 @@ class InvoiceModal(discord.ui.Modal):
 
 
         # ====================================================
+        # CHECK BOT CAN MANAGE THE ROLE
+        # ====================================================
+
+        if guild.me is None:
+
+            await interaction.response.send_message(
+                "❌ I couldn't retrieve my bot member.",
+                ephemeral=True
+            )
+
+            return
+
+
+        if role >= guild.me.top_role:
+
+            embed = discord.Embed(
+                title="❌ Role Permission Error",
+                description=(
+                    "I can't give the Customer role because "
+                    "my bot role isn't high enough.\n\n"
+                    "Go to **Server Settings → Roles** and "
+                    "move the bot's role **above** the "
+                    "**Customer** role."
+                ),
+                color=discord.Color.red()
+            )
+
+            await interaction.response.send_message(
+                embed=embed,
+                ephemeral=True
+            )
+
+            return
+
+
+        # ====================================================
         # GIVE CUSTOMER ROLE
         # ====================================================
 
@@ -246,8 +320,8 @@ class InvoiceModal(discord.ui.Modal):
             await member.add_roles(
                 role,
                 reason=(
-                    f"Customer verification - "
-                    f"Invoice ID: {invoice_id}"
+                    "Customer verification | "
+                    f"Invoice: {invoice_id}"
                 )
             )
 
@@ -256,10 +330,10 @@ class InvoiceModal(discord.ui.Modal):
             embed = discord.Embed(
                 title="❌ Permission Error",
                 description=(
-                    "I don't have permission to give "
-                    "you the Customer role.\n\n"
-                    "Make sure the bot's role is above "
-                    "the Customer role in Server Settings."
+                    "Discord didn't allow me to give you "
+                    "the Customer role.\n\n"
+                    "Make sure the bot's highest role is "
+                    "above the Customer role."
                 ),
                 color=discord.Color.red()
             )
@@ -274,14 +348,15 @@ class InvoiceModal(discord.ui.Modal):
         except discord.HTTPException as error:
 
             print(
-                f"Discord role error: {error}"
+                f"Role assignment error: {error}"
             )
 
             embed = discord.Embed(
                 title="❌ Discord Error",
                 description=(
                     "Discord couldn't give you the "
-                    "Customer role. Please try again."
+                    "Customer role.\n\n"
+                    "Please try again."
                 ),
                 color=discord.Color.red()
             )
@@ -349,7 +424,10 @@ class VerificationBot(discord.Client):
             id=GUILD_ID
         )
 
-        # Sync commands to your server
+        # ====================================================
+        # SYNC SLASH COMMANDS
+        # ====================================================
+
         self.tree.copy_global_to(
             guild=guild
         )
@@ -359,11 +437,7 @@ class VerificationBot(discord.Client):
         )
 
         # ====================================================
-        # IMPORTANT FOR RAILWAY
-        # ====================================================
-        # Registers the button every time the bot starts.
-        # This makes the existing Discord button continue
-        # working after Railway restarts.
+        # REGISTER PERSISTENT BUTTON
         # ====================================================
 
         self.add_view(
@@ -418,7 +492,7 @@ async def setup_verification(
 ):
 
     # ========================================================
-    # WHITE EMBED
+    # CREATE WHITE EMBED
     # ========================================================
 
     embed = discord.Embed(
@@ -452,13 +526,28 @@ async def setup_verification(
 
 
     # ========================================================
-    # SEND PANEL
+    # SEND EMBED + BUTTON
     # ========================================================
+
+    if interaction.channel is None:
+
+        await interaction.response.send_message(
+            "❌ I couldn't access this channel.",
+            ephemeral=True
+        )
+
+        return
+
 
     await interaction.channel.send(
         embed=embed,
         view=VerificationView()
     )
+
+
+    # ========================================================
+    # CONFIRM TO ADMIN
+    # ========================================================
 
     await interaction.response.send_message(
         "✅ Verification panel created.",
@@ -467,7 +556,7 @@ async def setup_verification(
 
 
 # ============================================================
-# COMMAND ERROR HANDLER
+# COMMAND ERROR
 # ============================================================
 
 @setup_verification.error
@@ -476,30 +565,33 @@ async def setup_verification_error(
     error
 ):
 
+    print(
+        f"Setup error: {error}"
+    )
+
     if isinstance(
         error,
         app_commands.errors.MissingPermissions
     ):
 
-        await interaction.response.send_message(
-            "❌ You need Administrator permissions "
-            "to use this command.",
-            ephemeral=True
-        )
-
-    else:
-
-        print(
-            f"Setup command error: {error}"
-        )
-
         if not interaction.response.is_done():
 
             await interaction.response.send_message(
-                "❌ An error occurred while creating "
-                "the verification panel.",
+                "❌ You need Administrator permissions "
+                "to use this command.",
                 ephemeral=True
             )
+
+        return
+
+
+    if not interaction.response.is_done():
+
+        await interaction.response.send_message(
+            "❌ An error occurred while creating "
+            "the verification panel.",
+            ephemeral=True
+        )
 
 
 # ============================================================
@@ -513,17 +605,17 @@ if not DISCORD_TOKEN:
     )
 
 
-if not GUILD_ID:
+if GUILD_ID == 0:
 
     raise ValueError(
-        "GUILD_ID is missing."
+        "GUILD_ID is missing or invalid."
     )
 
 
-if not CUSTOMER_ROLE_ID:
+if CUSTOMER_ROLE_ID == 0:
 
     raise ValueError(
-        "CUSTOMER_ROLE_ID is missing."
+        "CUSTOMER_ROLE_ID is missing or invalid."
     )
 
 
